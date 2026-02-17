@@ -1,24 +1,45 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { useAuth } from './context/AuthContext'
+import Login    from './pages/Login'
+import Register from './pages/Register'
 
-function App() {
+// Protected route — redirects to login if not logged in
+function ProtectedRoute({ children }) {
+  const { token } = useAuth()
+  return token ? children : <Navigate to="/login" />
+}
+
+function Dashboard() {
+  const { user, logout } = useAuth()
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center">
       <div className="text-center">
-        <h1 className="text-4xl font-bold text-white mb-4">
-          🎉 DocSign App
+        <h1 className="text-3xl font-bold text-white mb-2">
+          Welcome, {user?.name}! 👋
         </h1>
-        <p className="text-gray-400 text-lg mb-6">
-          Day 1 Complete — Backend + Frontend Running!
-        </p>
-        <div className="bg-green-600 text-white px-6 py-3 rounded-lg inline-block font-semibold">
-          ✅ Setup Successful
-        </div>
+        <p className="text-gray-400 mb-6">You are logged in successfully</p>
+        <button
+          onClick={logout}
+          className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-lg"
+        >
+          Logout
+        </button>
       </div>
     </div>
   )
 }
 
-export default App
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login"    element={<Login />} />
+      <Route path="/register" element={<Register />} />
+      <Route path="/dashboard" element={
+        <ProtectedRoute>
+          <Dashboard />
+        </ProtectedRoute>
+      } />
+      <Route path="/" element={<Navigate to="/login" />} />
+    </Routes>
+  )
+}
