@@ -139,4 +139,5 @@ async function embedSignature(originalPath, signature, optionalFields = []) {
   return fileName
 }
 
-module.exports = { embedSignature }
+module.exports = { embedSignature 
+}
