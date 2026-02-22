@@ -4,17 +4,26 @@ const path     = require('path')
 const fs       = require('fs')
 const Document = require('../models/Document')
 const authMiddleware = require('../middleware/auth')
+const { upload } = require('../config/cloudinary')
 const router   = express.Router()
 
 // ── Multer Storage Config ──────────────────
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, 'uploads/')  // save to uploads folder
-  },
-  filename: (req, file, cb) => {
-    // unique filename: timestamp + random number + original extension
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9)
-    cb(null, unique + path.extname(file.originalname))
+router.post('/upload', authMiddleware, upload.single('document'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' })
+    }
+
+    const doc = await Document.create({
+      originalName: req.file.originalname,
+      filePath: req.file.path, // Cloudinary URL
+      fileSize: req.file.size,
+      uploadedBy: req.user._id
+    })
+
+    res.status(201).json({ message: 'Document uploaded successfully', doc })
+  } catch (error) {
+    res.status(500).json({ message: error.message })
   }
 })
 
