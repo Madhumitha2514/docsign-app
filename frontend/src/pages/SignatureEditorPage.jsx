@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { Document, Page, pdfjs } from 'react-pdf'
 import api from '../api/axios'
 import 'react-pdf/dist/Page/AnnotationLayer.css'
 import 'react-pdf/dist/Page/TextLayer.css'
 
+// ✅ FIXED: Correct worker for Cloudinary PDFs
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
 export default function SignatureEditorPage() {
@@ -20,7 +21,11 @@ export default function SignatureEditorPage() {
   const [draggingField, setDraggingField] = useState(null)
   const [draggingPlacedField, setDraggingPlacedField] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [pdfError, setPdfError] = useState(false)
+  
+  const BASE_URL = import.meta.env.VITE_API_URL;
 
+  // ✅ FIXED: Safe signature loading
   useEffect(() => {
     let sigData = location.state?.signatureData
     
@@ -44,18 +49,49 @@ export default function SignatureEditorPage() {
   const fetchDocument = async () => {
     try {
       const res = await api.get(`/api/docs/${id}`)
+      console.log('📄 Document loaded:', res.data)
       setDoc(res.data)
+      setPdfError(false)
     } catch (err) {
+      console.error('❌ Document fetch error:', err)
       alert('Document not found')
       navigate('/dashboard')
     }
   }
-
+  
+  // ✅ FIXED: Safe PDF URL - Define AFTER doc is loaded
+  const getPdfUrl = () => {
+    if (!doc?.filePath) {
+      console.log('⚠️ No filePath yet')
+      return null
+    }
+    
+    const url = doc.filePath.startsWith('http') 
+      ? doc.filePath 
+      : `http://localhost:5000/uploads/${doc.filePath}`
+    
+    console.log('📄 Using PDF URL:', url)
+    return url
+  }
+  
+  const pdfUrl = getPdfUrl()
+  
+  const onDocumentLoadSuccess = ({ numPages }) => {
+    setNumPages(numPages)
+    setPdfError(false)
+    console.log('✅ PDF loaded successfully:', numPages, 'pages') 
+  }
+  
+  const onDocumentLoadError = (error) => {
+    console.error('❌ PDF load error:', error)
+    setPdfError(true)
+  }
+  
   const renderSignaturePreview = () => {
     if (!signatureData) {
       return <span className="text-slate-400 text-xs">⚠️ No signature</span>
     }
-
+  
     if (signatureData.type === 'text') {
       return (
         <div className={`text-xl ${signatureData.font}`} style={getFontStyle(signatureData.font)}>
@@ -68,6 +104,7 @@ export default function SignatureEditorPage() {
           src={signatureData.actualSignature} 
           alt="Signature" 
           className="max-h-14 max-w-full object-contain"
+          onError={(e) => console.error('Signature image failed to load')}
         />
       )
     }
@@ -84,18 +121,16 @@ export default function SignatureEditorPage() {
     { id: 'company', label: 'Company Stamp', icon: '🏢', color: 'cyan', required: false, editable: true }
   ]
 
-  // Drag NEW field from palette
+  // Drag handlers (unchanged)
   const handleDragStart = (field) => {
     setDraggingField(field)
   }
 
-  // Drag EXISTING placed field to reposition
   const handlePlacedFieldDragStart = (e, field) => {
     e.stopPropagation()
     setDraggingPlacedField(field)
   }
 
-  // Drop handler for both new and repositioned fields
   const handleDrop = (e) => {
     e.preventDefault()
     
@@ -104,7 +139,6 @@ export default function SignatureEditorPage() {
     const x = ((e.clientX - rect.left) / rect.width) * 100
     const y = ((e.clientY - rect.top) / rect.height) * 100
 
-    // Repositioning existing field
     if (draggingPlacedField) {
       setPlacedFields(placedFields.map(f => 
         f.fieldId === draggingPlacedField.fieldId
@@ -113,7 +147,6 @@ export default function SignatureEditorPage() {
       ))
       setDraggingPlacedField(null)
     }
-    // Placing new field
     else if (draggingField) {
       setPlacedFields([...placedFields, {
         ...draggingField,
@@ -121,7 +154,7 @@ export default function SignatureEditorPage() {
         x,
         y,
         page: currentPage,
-        value: '' // For editable fields
+        value: ''
       }])
       setDraggingField(null)
     }
@@ -136,7 +169,32 @@ export default function SignatureEditorPage() {
       f.fieldId === fieldId ? { ...f, value } : f
     ))
   }
-
+  const saveSignaturePosition = async () => {
+    const sigField = placedFields.find(f => f.id === 'signature')
+    if (!sigField || !signatureData) return
+  
+    try {
+      await api.post('/api/signatures', {
+        documentId: id,
+        xPercent: sigField.x,
+        yPercent: sigField.y,
+        page: sigField.page || 1,
+        signatureType: signatureData.type,
+        signatureImage: signatureData.actualSignature,
+        signatureText: signatureData.text,
+        signerName: signatureData.signerName || signatureData.text || 'Signed'  // ✅ Fixed
+      })
+      console.log('✅ Signature position saved')
+    } catch (err) {
+      console.error('❌ Failed to save signature position:', err)
+    }
+  }
+  useEffect(() => {
+    const sigField = placedFields.find(f => f.id === 'signature')
+    if (sigField && signatureData) {
+      saveSignaturePosition()
+    }
+  }, [placedFields])
   const handleSign = async () => {
     const signatureField = placedFields.find(f => f.id === 'signature')
     if (!signatureField) {
@@ -151,42 +209,23 @@ export default function SignatureEditorPage() {
 
     setSaving(true)
     try {
-      await api.post('/api/signatures', {
-        documentId: id,
-        xPercent: signatureField.x,
-        yPercent: signatureField.y,
-        page: signatureField.page,
-        signatureType: signatureData.type,
-        signatureImage: signatureData.actualSignature,
-        signatureText: signatureData.text,
-        signerName: signatureData.signerName
-      })
-
       const finalizePayload = {
         documentId: id,
         signerName: signatureData.signerName || signatureData.text || 'Signed',
-        placedFields: placedFields // Send ALL placed fields including optional ones
+        placedFields: placedFields
       }
 
       if (signatureData.type === 'text') {
         finalizePayload.signatureText = signatureData.text
         finalizePayload.signatureFont = signatureData.font
-        console.log('📝 Sending TEXT signature:', signatureData.text)
       } else if (signatureData.type === 'draw' || signatureData.type === 'upload') {
         finalizePayload.signatureImage = signatureData.actualSignature
-        console.log('🖼️ Sending IMAGE signature, length:', signatureData.actualSignature?.length)
       }
 
-      console.log('📤 Final payload:', {
-        hasImage: !!finalizePayload.signatureImage,
-        hasText: !!finalizePayload.signatureText,
-        signerName: finalizePayload.signerName,
-        placedFieldsCount: placedFields.length
-      })
-
+      console.log('📤 Signing payload:', finalizePayload)
       const response = await api.post('/api/signatures/finalize', finalizePayload)
       
-      console.log('✅ Backend response:', response.data)
+      console.log('✅ Signed successfully:', response.data)
       alert('✅ Document signed successfully!')
       navigate('/dashboard')
       
@@ -198,6 +237,7 @@ export default function SignatureEditorPage() {
     }
   }
 
+  // Loading state
   if (!doc) {
     return (
       <div className="min-h-screen bg-[#0F172A] flex items-center justify-center">
@@ -209,13 +249,34 @@ export default function SignatureEditorPage() {
     )
   }
 
-  const pdfUrl = `http://localhost:5000/uploads/${doc.filePath}`
+
+  if (!pdfUrl) {
+    return (
+      <div className="min-h-screen bg-[#0F172A] flex items-center justify-center">
+        <div className="text-center max-w-md p-8 bg-slate-800 rounded-xl">
+          <div className="text-red-400 mb-6">
+            <svg className="w-20 h-20 mx-auto" fill="none" viewBox="0 0 24 24">
+              <path stroke="currentColor" strokeWidth="1.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-4">No PDF Available</h2>
+          <p className="text-slate-400 mb-6">Document file not found. Please check your upload.</p>
+          <button 
+            onClick={() => navigate('/dashboard')}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium"
+          >
+            Back to Dashboard
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   const requiredFields = allFields.filter(f => f.required)
   const optionalFields = allFields.filter(f => !f.required)
 
   return (
     <div className="min-h-screen bg-[#0F172A] flex">
-      
       {/* LEFT: Page thumbnails */}
       <div className="w-36 bg-[#1E293B] border-r border-slate-700/50 p-3 overflow-y-auto">
         <div className="space-y-2">
@@ -237,7 +298,6 @@ export default function SignatureEditorPage() {
 
       {/* CENTER: PDF Canvas */}
       <div className="flex-1 flex flex-col bg-slate-900">
-        
         {/* Top toolbar */}
         <div className="bg-[#1E293B] border-b border-slate-700/50 px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -251,12 +311,14 @@ export default function SignatureEditorPage() {
             </button>
             <div>
               <h2 className="text-slate-100 font-semibold text-sm">{doc.originalName}</h2>
-              <p className="text-slate-500 text-xs">Page {currentPage} of {numPages}</p>
+              <p className="text-slate-500 text-xs">
+                Page {currentPage} of {numPages || '?'} • {pdfError ? 'PDF Error' : 'Ready'}
+              </p>
             </div>
           </div>
           <button
             onClick={handleSign}
-            disabled={saving || placedFields.length === 0}
+            disabled={saving || placedFields.length === 0 || !signatureData}
             className="bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white font-semibold px-6 py-2 rounded-lg transition shadow-lg shadow-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {saving ? (
@@ -270,22 +332,63 @@ export default function SignatureEditorPage() {
             ) : (
               <>
                 <span className="text-lg">✍️</span>
-                Sign
+                Sign Document
               </>
             )}
           </button>
         </div>
 
         {/* PDF viewer */}
-        <div className="flex-1 overflow-auto p-8 flex items-start justify-center">
+        <div className="flex-1 overflow-auto p-8 flex items-start justify-center min-h-0">
           <div
             onDrop={handleDrop}
             onDragOver={(e) => e.preventDefault()}
-            className="relative inline-block bg-white shadow-2xl"
+            className="relative inline-block bg-white shadow-2xl border-4 border-dashed border-gray-200 hover:border-indigo-300 transition-all duration-200 max-w-4xl w-full"
           >
-            <Document file={pdfUrl} onLoadSuccess={(pdf) => setNumPages(pdf.numPages)}>
-              <Page pageNumber={currentPage} width={700} renderTextLayer={false} />
-            </Document>
+            {/* ✅ FIXED PDF Viewer */}
+            {pdfError ? (
+              <div className="p-12 text-center border-2 border-red-200 bg-red-50 rounded-lg">
+                <div className="text-red-500 mb-4">
+                  <svg className="w-16 h-16 mx-auto" fill="none" viewBox="0 0 24 24">
+                    <path stroke="currentColor" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+                  </svg>
+                </div>
+                <h3 className="text-lg font-semibold text-red-800 mb-2">PDF Load Failed</h3>
+                <p className="text-red-600 mb-6">Check Cloudinary CORS settings</p>
+                <a 
+                  href={pdfUrl} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2 rounded-lg font-medium inline-flex items-center gap-2"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                  Open PDF Directly
+                </a>
+              </div>
+            ) : (
+              <Document 
+                file={pdfUrl} 
+                onLoadSuccess={onDocumentLoadSuccess}
+                onLoadError={onDocumentLoadError}
+                loading={
+                  <div className="flex flex-col items-center justify-center p-24 bg-gray-50 rounded-lg">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mb-4"></div>
+                    <p className="text-gray-600 font-medium">Loading PDF...</p>
+                    <p className="text-sm text-gray-500 mt-1">{doc.originalName}</p>
+                  </div>
+                }
+              >
+                <Page 
+                  pageNumber={currentPage} 
+                  width={Math.min(700, window.innerWidth - 200)} 
+                  renderTextLayer={false}
+                  renderAnnotationLayer={false}
+                  className="shadow-2xl"
+                />
+              </Document>
+            )}
 
             {/* Placed fields */}
             {placedFields.filter(f => f.page === currentPage).map(field => (
@@ -298,11 +401,12 @@ export default function SignatureEditorPage() {
                   left: `${field.x}%`,
                   top: `${field.y}%`,
                   transform: 'translate(-50%, -50%)',
-                  cursor: 'grab'
+                  cursor: 'grab',
+                  zIndex: 1000
                 }}
-                className="group active:cursor-grabbing"
+                className="group active:cursor-grabbing select-none"
               >
-                <div className="relative bg-indigo-500/10 border-2 border-indigo-500 border-dashed rounded-lg px-3 py-2 backdrop-blur-sm">
+                <div className="relative bg-indigo-500/15 border-2 border-indigo-400/50 rounded-lg px-3 py-2 backdrop-blur-sm shadow-lg min-w-[100px]">
                   
                   {/* SIGNATURE FIELD */}
                   {field.id === 'signature' && renderSignaturePreview()}
@@ -315,7 +419,7 @@ export default function SignatureEditorPage() {
                       onChange={(e) => updateFieldValue(field.fieldId, e.target.value)}
                       onClick={(e) => e.stopPropagation()}
                       placeholder={field.label}
-                      className="bg-white/90 text-gray-900 text-sm px-2 py-1 rounded border border-indigo-300 min-w-[120px] focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="bg-white/95 text-gray-900 text-sm px-2 py-1 rounded border border-indigo-300 min-w-[120px] focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-center font-medium"
                     />
                   )}
                   
@@ -325,9 +429,9 @@ export default function SignatureEditorPage() {
                       e.stopPropagation()
                       removeField(field.fieldId)
                     }}
-                    className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition text-xs z-10"
+                    className="absolute -top-1 -right-1 w-6 h-6 bg-red-500 hover:bg-red-600 text-white rounded-full flex items-center justify-center text-xs font-bold shadow-lg opacity-0 group-hover:opacity-100 transition-all z-20 border-2 border-white/50 hover:scale-110"
                   >
-                    ✕
+                    ×
                   </button>
                 </div>
               </div>
@@ -336,10 +440,8 @@ export default function SignatureEditorPage() {
         </div>
       </div>
 
-      {/* RIGHT: Field palette */}
+      {/* RIGHT: Field palette (unchanged) */}
       <div className="w-80 bg-[#1E293B] border-l border-slate-700/50 overflow-y-auto">
-        
-        {/* Type selector */}
         <div className="p-4 border-b border-slate-700/50">
           <div className="flex gap-2">
             <button className="flex-1 bg-indigo-600 text-white rounded-lg py-2 text-sm font-medium">
@@ -351,7 +453,6 @@ export default function SignatureEditorPage() {
           </div>
         </div>
 
-        {/* Required fields */}
         <div className="p-4 border-b border-slate-700/50">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-slate-300 text-sm font-bold">Required fields</h3>
@@ -363,7 +464,7 @@ export default function SignatureEditorPage() {
               key={field.id}
               draggable
               onDragStart={() => handleDragStart(field)}
-              className="mb-3 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 rounded-lg p-3 cursor-grab active:cursor-grabbing hover:border-indigo-500/50 transition"
+              className="mb-3 bg-gradient-to-r from-indigo-500/10 to-purple-500/10 border border-indigo-500/30 rounded-lg p-3 cursor-grab active:cursor-grabbing hover:border-indigo-500/50 transition shadow-md hover:shadow-lg"
             >
               <div className="flex items-center gap-2 mb-2">
                 <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white">
@@ -381,7 +482,6 @@ export default function SignatureEditorPage() {
           ))}
         </div>
 
-        {/* Optional fields */}
         <div className="p-4">
           <h3 className="text-slate-300 text-sm font-bold mb-3">Optional fields</h3>
           <div className="space-y-2">
@@ -390,7 +490,7 @@ export default function SignatureEditorPage() {
                 key={field.id}
                 draggable
                 onDragStart={() => handleDragStart(field)}
-                className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 cursor-grab active:cursor-grabbing hover:border-slate-600 transition"
+                className="bg-slate-800/50 border border-slate-700 rounded-lg p-3 cursor-grab active:cursor-grabbing hover:border-slate-600 transition hover:bg-slate-800/70"
               >
                 <div className="flex items-center gap-2">
                   <div className={`w-7 h-7 bg-${field.color}-600 rounded-lg flex items-center justify-center text-white text-sm`}>
@@ -403,18 +503,17 @@ export default function SignatureEditorPage() {
           </div>
         </div>
 
-        {/* Placed fields counter */}
         {placedFields.length > 0 && (
           <div className="p-4 border-t border-slate-700/50">
             <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3">
               <p className="text-emerald-400 text-sm font-medium">
                 ✓ {placedFields.length} field{placedFields.length !== 1 ? 's' : ''} placed
               </p>
-              <div className="mt-2 space-y-1">
+              <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">
                 {placedFields.map(f => (
-                  <div key={f.fieldId} className="text-xs text-emerald-300/70 flex items-center justify-between">
-                    <span>{f.label} (Pg {f.page})</span>
-                    {f.value && <span className="text-emerald-200">"{f.value}"</span>}
+                  <div key={f.fieldId} className="text-xs text-emerald-300/90 flex items-center justify-between py-1">
+                    <span>{f.label} <span className="text-emerald-200/70">(Pg {f.page})</span></span>
+                    {f.value && <span className="text-emerald-200 font-mono bg-emerald-500/20 px-1 py-0.5 rounded text-xs">"{f.value}"</span>}
                   </div>
                 ))}
               </div>
@@ -422,7 +521,6 @@ export default function SignatureEditorPage() {
           </div>
         )}
       </div>
-
     </div>
   )
 }

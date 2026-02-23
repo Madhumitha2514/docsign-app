@@ -115,7 +115,11 @@ export default function PublicSignPage() {
     )
   }
 
-  const pdfUrl = `http://localhost:5000/uploads/${document.filePath}`
+  const pdfUrl = document.filePath?.startsWith('http')
+  ? document.filePath
+  : `http://localhost:5000/uploads/${document.filePath}`
+
+console.log('📄 Public PDF URL:', pdfUrl)
 
   return (
     <div className="min-h-screen bg-[#0F172A]">

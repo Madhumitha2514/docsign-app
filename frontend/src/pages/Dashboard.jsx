@@ -351,7 +351,9 @@ export default function Dashboard() {
                       <>
                         {/* Download Button */}
                         <a
-                          href={doc.signedFilePath}
+                          href={doc.signedFilePath?.startsWith('http')
+                            ? doc.signedFilePath
+                            : `${import.meta.env.VITE_API_URL}/uploads/${doc.signedFilePath}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-400 hover:to-indigo-400 text-white text-sm px-4 py-2 rounded-lg font-medium transition shadow-lg shadow-blue-500/20 whitespace-nowrap flex items-center gap-2"

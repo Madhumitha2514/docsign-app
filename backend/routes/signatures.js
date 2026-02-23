@@ -196,10 +196,14 @@ router.get('/public/:token', async (req, res) => {
 })
 
 // ── PUBLIC: SIGN DOCUMENT (Day 9) ──────────
+// ── PUBLIC: SIGN DOCUMENT (Day 9) ──────────
 router.post('/public/sign/:token', async (req, res) => {
   try {
     const { signatureData } = req.body
     const token = req.params.token
+
+    console.log('🔥 PUBLIC SIGN REQUEST')
+    console.log('Signature data:', signatureData ? 'Received' : 'Missing')
 
     const signer = await Signer.findOne({ signingToken: token })
       .populate('documentId')
@@ -212,6 +216,17 @@ router.post('/public/sign/:token', async (req, res) => {
       return res.status(400).json({ message: 'Document already signed' })
     }
 
+    // ✅ SAVE SIGNER'S SIGNATURE TO DATABASE
+    const signature = await Signature.findOne({ documentId: signer.documentId._id })
+    if (signature && signatureData) {
+      // Update signature with signer's signature image
+      signature.signatureImage = signatureData.actualSignature || signature.signatureImage
+      signature.signatureText = signatureData.text || signature.signatureText
+      signature.signerName = signer.name
+      await signature.save()
+      console.log('✅ Signature updated with signer data')
+    }
+
     // Update signer status
     signer.status = 'signed'
     signer.signedAt = new Date()
@@ -221,14 +236,50 @@ router.post('/public/sign/:token', async (req, res) => {
     // Check if all signers are done
     const allSigners = await Signer.find({ documentId: signer.documentId._id })
     const allSigned = allSigners.every(s => s.status === 'signed')
-
+    console.log('📊 Signer status:')
+    console.log('  Total signers:', allSigners.length)
+    console.log('  Signed:', allSigners.filter(s => s.status === 'signed').length)
+    console.log('  All signed?', allSigned)
     if (allSigned) {
-      // Finalize document
+      console.log('✅ All signers completed! Generating final PDF...')
+      
+      // ✅ REGENERATE PDF WITH ALL SIGNATURES
       const doc = signer.documentId
-      doc.status = 'signed'
-      await doc.save()
+      const { embedSignature } = require('../utils/pdfSigner')
+      
+      try {
+        const signedFileUrl = await embedSignature(
+          doc.filePath,
+          {
+            xPercent: signature.xPercent,
+            yPercent: signature.yPercent,
+            page: signature.page,
+            signerName: signer.name,
+            signatureImage: signature.signatureImage,
+            signatureText: signature.signatureText
+          },
+          [] // No optional fields for now
+        )
 
-      console.log('✅ All signers completed! Document finalized.')
+       // ✅ CHECK: Are there external signers waiting?
+const externalSigners = await Signer.find({ documentId: doc._id })
+const hasPendingSigners = externalSigners.some(s => s.status === 'pending')
+
+if (hasPendingSigners) {
+  console.log('⏳ Owner signed, but waiting for external signers')
+  doc.status = 'pending'  // ✅ Keep as pending
+  doc.signedFilePath = signedFileUrl
+} else {
+  console.log('✅ Owner signed, no external signers - marking as complete')
+  doc.status = 'signed'  // ✅ Mark as signed only if no external signers
+  doc.signedFilePath = signedFileUrl
+}
+await doc.save()
+
+        console.log('✅ Final PDF generated:', signedFileUrl)
+      } catch (pdfError) {
+        console.error('❌ PDF generation error:', pdfError)
+      }
     }
 
     // Audit log
@@ -245,7 +296,6 @@ router.post('/public/sign/:token', async (req, res) => {
     res.status(500).json({ message: error.message })
   }
 })
-
 // ── PUBLIC: REJECT DOCUMENT (Day 11) ───────
 router.post('/public/reject/:token', async (req, res) => {
   try {
@@ -274,10 +324,12 @@ router.post('/public/reject/:token', async (req, res) => {
   }
 })
 
-// ── FINALIZE SIGNATURE (OWNER SIGNS) ───────
 router.post('/finalize', authMiddleware, async (req, res) => {
+  console.log('🔥 FINALIZE ROUTE HIT!')
+  console.log('Body:', req.body)
+  
   try {
-    const { documentId, signerName, placedFields } = req.body
+    const { documentId, signerName, placedFields, signatureImage, signatureText } = req.body
 
     const doc = await Document.findOne({ _id: documentId, uploadedBy: req.user._id })
     if (!doc) return res.status(404).json({ message: 'Document not found' })
@@ -304,23 +356,23 @@ router.post('/finalize', authMiddleware, async (req, res) => {
 
     console.log('📋 Optional fields:', optionalFields.length)
 
-    // Embed signature
+    // ✅ FIXED: Pass Cloudinary URL directly (pdfSigner will download it)
     const { embedSignature } = require('../utils/pdfSigner')
-    const signedFilePath = await embedSignature(
-      `uploads/${doc.filePath}`,
+    const signedFileUrl = await embedSignature(
+      doc.filePath,  // ✅ This is now the full Cloudinary URL
       {
         xPercent: signature.xPercent,
         yPercent: signature.yPercent,
         page: signature.page,
         signerName: signerName,
-        signatureImage: signature.signatureImage,
-        signatureText: signature.signatureText
+        signatureImage: signatureImage || signature.signatureImage,  // ✅ Use from request or DB
+        signatureText: signatureText || signature.signatureText
       },
       optionalFields
     )
 
     doc.status = 'signed'
-    doc.signedFilePath = signedFilePath
+    doc.signedFilePath = signedFileUrl  // ✅ This is now a Cloudinary URL
     await doc.save()
 
     signature.status = 'signed'
@@ -335,7 +387,7 @@ router.post('/finalize', authMiddleware, async (req, res) => {
 
     res.json({
       message: 'Document signed successfully!',
-      signedUrl: `/uploads/${signedFilePath}`
+      signedUrl: signedFileUrl  // ✅ Return Cloudinary URL
     })
 
   } catch (error) {
@@ -364,6 +416,22 @@ router.get('/audit/:documentId', authMiddleware, async (req, res) => {
 
   } catch (error) {
     res.status(500).json({ message: error.message })
+  }
+})
+// TEST: Check if signature exists
+router.get('/check/:docId', authMiddleware, async (req, res) => {
+  try {
+    const signature = await Signature.findOne({ documentId: req.params.docId })
+    const doc = await Document.findOne({ _id: req.params.docId, uploadedBy: req.user._id })
+    
+    res.json({
+      hasSignature: !!signature,
+      hasDocument: !!doc,
+      signature: signature,
+      document: doc
+    })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
   }
 })
 

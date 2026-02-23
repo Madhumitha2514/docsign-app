@@ -1,62 +1,41 @@
-const express  = require('express')
-const multer   = require('multer')
-const path     = require('path')
-const fs       = require('fs')
+const express = require('express')
+const { upload } = require('../config/cloudinary')  // ✅ Import from cloudinary
 const Document = require('../models/Document')
 const authMiddleware = require('../middleware/auth')
-const { upload } = require('../config/cloudinary')
-const router   = express.Router()
+const router = express.Router()
 
-// ── Multer Storage Config ──────────────────
-router.post('/upload', authMiddleware, upload.single('document'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' })
-    }
-
-    const doc = await Document.create({
-      originalName: req.file.originalname,
-      filePath: req.file.path, // Cloudinary URL
-      fileSize: req.file.size,
-      uploadedBy: req.user._id
-    })
-
-    res.status(201).json({ message: 'Document uploaded successfully', doc })
-  } catch (error) {
-    res.status(500).json({ message: error.message })
-  }
-})
-
-// Only allow PDF files
-const fileFilter = (req, file, cb) => {
-  if (file.mimetype === 'application/pdf') {
-    cb(null, true)
-  } else {
-    cb(new Error('Only PDF files allowed!'), false)
-  }
-}
-
-const upload = multer({ storage, fileFilter, limits: { fileSize: 10 * 1024 * 1024 } })
-// 10MB max file size
+// NO multer setup here - it's in cloudinary.js now!
 
 // ── UPLOAD PDF ─────────────────────────────
 // POST /api/docs/upload
 router.post('/upload', authMiddleware, upload.single('document'), async (req, res) => {
+  console.log('🔥 UPLOAD ROUTE HIT!')
+  console.log('File received:', req.file)
+  
   try {
     if (!req.file) {
+      console.log('❌ No file in request')
       return res.status(400).json({ message: 'No file uploaded' })
     }
 
+    // Cloudinary URL is in req.file.path
+    const cloudinaryUrl = req.file.path
+    console.log('📤 File uploaded to Cloudinary:', cloudinaryUrl)
+
     const doc = await Document.create({
       originalName: req.file.originalname,
-      filePath:     req.file.filename,
-      fileSize:     req.file.size,
-      uploadedBy:   req.user._id
+      filePath: cloudinaryUrl,  // ✅ Save Cloudinary URL
+      fileSize: req.file.size,
+      uploadedBy: req.user._id,
+      status: 'pending'
     })
+
+    console.log('✅ Document saved:', doc)
 
     res.status(201).json({ message: 'Document uploaded successfully', doc })
 
   } catch (error) {
+    console.error('❌ Upload error:', error)
     res.status(500).json({ message: error.message })
   }
 })
@@ -104,18 +83,24 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     
     if (!doc) return res.status(404).json({ message: 'Document not found' })
 
-    // Delete files from disk
+    // Delete from Cloudinary
+    const { cloudinary } = require('../config/cloudinary')
+    
     try {
-      if (doc.filePath && fs.existsSync(`uploads/${doc.filePath}`)) {
-        fs.unlinkSync(`uploads/${doc.filePath}`)
-        console.log('🗑️ Deleted original:', doc.filePath)
+      // Extract public_id from Cloudinary URL
+      if (doc.filePath && doc.filePath.includes('cloudinary')) {
+        const publicId = doc.filePath.split('/').slice(-2).join('/').split('.')[0]
+        await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' })
+        console.log('🗑️ Deleted from Cloudinary:', publicId)
       }
-      if (doc.signedFilePath && fs.existsSync(`uploads/${doc.signedFilePath}`)) {
-        fs.unlinkSync(`uploads/${doc.signedFilePath}`)
-        console.log('🗑️ Deleted signed:', doc.signedFilePath)
+      
+      if (doc.signedFilePath && doc.signedFilePath.includes('cloudinary')) {
+        const signedPublicId = doc.signedFilePath.split('/').slice(-2).join('/').split('.')[0]
+        await cloudinary.uploader.destroy(signedPublicId, { resource_type: 'raw' })
+        console.log('🗑️ Deleted signed from Cloudinary:', signedPublicId)
       }
-    } catch (fileErr) {
-      console.error('⚠️ File delete warning:', fileErr.message)
+    } catch (cloudErr) {
+      console.error('⚠️ Cloudinary delete warning:', cloudErr.message)
     }
 
     // Delete from database
