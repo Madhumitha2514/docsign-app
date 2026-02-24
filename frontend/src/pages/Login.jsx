@@ -18,12 +18,27 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
     setError('')
+    
+    // ✅ DEBUG LOGS
+    console.log('🔐 Attempting login...')
+    console.log('API Base URL:', api.defaults.baseURL)
+    console.log('Email:', form.email)
+    
     try {
       const res = await api.post('/api/auth/login', form)
+      console.log('✅ Login successful:', res.data)
+      
       login(res.data.user, res.data.token)
+      console.log('✅ Auth context updated, navigating to dashboard...')
+      
       navigate('/dashboard')
     } catch (err) {
-      setError(err.response?.data?.message || 'Something went wrong')
+      console.error('❌ Login error:', err)
+      console.error('Error response:', err.response?.data)
+      
+      const errorMsg = err.response?.data?.message || 'Something went wrong'
+      setError(errorMsg)
+      alert('❌ ' + errorMsg)  // ✅ Show alert too
     } finally {
       setLoading(false)
     }

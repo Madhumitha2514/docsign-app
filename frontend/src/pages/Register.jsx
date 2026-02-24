@@ -18,12 +18,27 @@ export default function Register() {
     e.preventDefault()
     setLoading(true)
     setError('')
+    
+    // ✅ DEBUG LOGS
+    console.log('📝 Attempting registration...')
+    console.log('API Base URL:', api.defaults.baseURL)
+    console.log('Form data:', form)
+    
     try {
       const res = await api.post('/api/auth/register', form)
+      console.log('✅ Registration successful:', res.data)
+      
       login(res.data.user, res.data.token)
+      console.log('✅ Logged in, navigating to dashboard...')
+      
       navigate('/dashboard')
     } catch (err) {
-      setError(err.response?.data?.message || 'Something went wrong')
+      console.error('❌ Registration error:', err)
+      console.error('Error response:', err.response?.data)
+      
+      const errorMsg = err.response?.data?.message || 'Something went wrong'
+      setError(errorMsg)
+      alert('❌ ' + errorMsg)  // ✅ Show alert too
     } finally {
       setLoading(false)
     }
@@ -70,6 +85,7 @@ export default function Register() {
               placeholder="Min 6 characters"
               className="w-full bg-gray-700 text-white px-4 py-3 rounded-lg border border-gray-600 focus:border-indigo-500 focus:outline-none"
               required
+              minLength={6}
             />
           </div>
           <button
