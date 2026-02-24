@@ -1,3 +1,11 @@
+<<<<<<< HEAD
+node_modules/
+.env
+backend/uploads/
+dist/
+.DS_Store
+*.log
+=======
 # Logs
 logs
 *.log
@@ -22,3 +30,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+>>>>>>> e414201 (fixed api url)
