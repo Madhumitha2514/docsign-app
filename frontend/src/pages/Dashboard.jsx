@@ -117,41 +117,28 @@ export default function Dashboard() {
       })
       console.log('✅ Document uploaded:', res.data.doc._id)
       
-      setDocs([res.data.doc, ...docs])
       const docId = res.data.doc._id
       
-      // STEP 2: Pass signature to editor if created
+      // Update docs list
+      setDocs(prevDocs => [res.data.doc, ...prevDocs])
+      
+      // STEP 2: Save signature if exists
       if (inviteData.signatureData) {
         localStorage.setItem('pendingSignature', JSON.stringify(inviteData.signatureData))
         console.log('💾 Signature saved to localStorage')
       }
       
-      // STEP 3: Send emails (CRITICAL - Check if this runs)
+      // STEP 3: Save signers to send LATER from editor
       if (inviteData.signers && inviteData.signers.length > 0) {
-        console.log('📧 ===== SENDING EMAIL REQUEST =====')
-        console.log('Document ID:', docId)
-        console.log('Signers:', inviteData.signers)
-        
-        try {
-          const emailRes = await api.post('/api/signatures/send-for-signing', {
-            documentId: docId,
-            signers: inviteData.signers,
-            expiryDays: inviteData.expiryDays || 15,
-            signInOrder: inviteData.signInOrder || false
-          })
-          
-          console.log('✅ EMAIL REQUEST SUCCESS:', emailRes.data)
-        } catch (emailErr) {
-          console.error('❌ EMAIL REQUEST FAILED:', emailErr)
-          console.error('Error response:', emailErr.response?.data)
-          console.error('Error status:', emailErr.response?.status)
-        }
-      } else {
-        console.log('⚠️ No signers to send emails to')
+        localStorage.setItem('pendingSigners', JSON.stringify(inviteData.signers))
+        localStorage.setItem('pendingSignersDocId', docId)
+        console.log('💾 Signers saved - will send from editor after placing fields')
       }
       
-      // STEP 4: Navigate to editor
+      // STEP 4: Always navigate to editor
+      setUploading(false)
       console.log('🚀 Navigating to editor...')
+      
       if (inviteData.signatureData) {
         navigate(`/editor/${docId}`, { 
           state: { signatureData: inviteData.signatureData }
@@ -165,7 +152,6 @@ export default function Dashboard() {
     } catch (err) {
       console.error('❌ Upload error:', err)
       alert(err.response?.data?.message || 'Upload failed')
-    } finally {
       setUploading(false)
     }
   }

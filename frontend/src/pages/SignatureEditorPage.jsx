@@ -169,6 +169,7 @@ export default function SignatureEditorPage() {
       f.fieldId === fieldId ? { ...f, value } : f
     ))
   }
+
   const saveSignaturePosition = async () => {
     const sigField = placedFields.find(f => f.id === 'signature')
     if (!sigField || !signatureData) return
@@ -182,19 +183,21 @@ export default function SignatureEditorPage() {
         signatureType: signatureData.type,
         signatureImage: signatureData.actualSignature,
         signatureText: signatureData.text,
-        signerName: signatureData.signerName || signatureData.text || 'Signed'  // ✅ Fixed
+        signerName: signatureData.signerName || signatureData.text || 'Signed'
       })
       console.log('✅ Signature position saved')
     } catch (err) {
       console.error('❌ Failed to save signature position:', err)
     }
   }
+
   useEffect(() => {
     const sigField = placedFields.find(f => f.id === 'signature')
     if (sigField && signatureData) {
       saveSignaturePosition()
     }
   }, [placedFields])
+
   const handleSign = async () => {
     const signatureField = placedFields.find(f => f.id === 'signature')
     if (!signatureField) {
@@ -249,7 +252,6 @@ export default function SignatureEditorPage() {
     )
   }
 
-
   if (!pdfUrl) {
     return (
       <div className="min-h-screen bg-[#0F172A] flex items-center justify-center">
@@ -274,6 +276,13 @@ export default function SignatureEditorPage() {
 
   const requiredFields = allFields.filter(f => f.required)
   const optionalFields = allFields.filter(f => !f.required)
+
+  // ✅ NEW: Check for pending signers
+  const pendingSigners = localStorage.getItem('pendingSigners')
+  const pendingDocId = localStorage.getItem('pendingSignersDocId')
+  const hasPendingSigners = pendingSigners && pendingDocId === id
+  const signers = hasPendingSigners ? JSON.parse(pendingSigners) : []
+  const hasSignatureField = placedFields.find(f => f.id === 'signature')
 
   return (
     <div className="min-h-screen bg-[#0F172A] flex">
@@ -316,26 +325,97 @@ export default function SignatureEditorPage() {
               </p>
             </div>
           </div>
-          <button
-            onClick={handleSign}
-            disabled={saving || placedFields.length === 0 || !signatureData}
-            className="bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white font-semibold px-6 py-2 rounded-lg transition shadow-lg shadow-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {saving ? (
-              <>
-                <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Signing...
-              </>
-            ) : (
-              <>
-                <span className="text-lg">✍️</span>
-                Sign Document
-              </>
+
+          {/* ✅ NEW: Action Buttons */}
+          <div className="flex items-center gap-3">
+            {/* Send for Signing Button - Only if pending signers exist */}
+            {/* Send for Signing Button */}
+{hasPendingSigners && (
+  <button
+    onClick={async (e) => {
+      e.preventDefault()  // ✅ Prevent default
+      e.stopPropagation() // ✅ Stop event bubbling
+      
+      if (!hasSignatureField) {
+        alert('⚠️ Please place the signature field first!')
+        return
+      }
+      
+      if (saving) return // ✅ Prevent double-click
+      
+      setSaving(true) // ✅ Set loading state
+      
+      console.log('🔥 Sending invitations...')
+      console.log('Document ID:', id)
+      console.log('Signers:', signers)
+      
+      try {
+        const response = await api.post('/api/signatures/send-for-signing', {
+          documentId: id,
+          signers: signers,
+          expiryDays: 15,
+          signInOrder: false
+        })
+        
+        console.log('✅ Response:', response.data)
+        alert(`✅ Signing invitations sent to ${signers.length} signer(s)!`)
+        
+        localStorage.removeItem('pendingSigners')
+        localStorage.removeItem('pendingSignersDocId')
+        
+        navigate('/dashboard')
+      } catch (err) {
+        console.error('❌ Full error:', err)
+        console.error('Response:', err.response?.data)
+        alert('Failed: ' + (err.response?.data?.message || err.message))
+      } finally {
+        setSaving(false) // ✅ Reset loading state
+      }
+    }}
+    disabled={saving || !hasSignatureField} // ✅ Disable when loading
+    className="bg-green-600 hover:bg-green-700 text-white font-semibold px-5 py-2 rounded-lg transition shadow-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+  >
+    {saving ? (
+      <>
+        <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        Sending...
+      </>
+    ) : (
+      <>
+        <span>📧</span>
+        <span>Send for Signing ({signers.length})</span>
+      </>
+    )}
+  </button>
+)}
+
+            {/* Sign Document Button - Only if NOT pending signers */}
+            {!hasPendingSigners && (
+              <button
+                onClick={handleSign}
+                disabled={saving || placedFields.length === 0 || !signatureData}
+                className="bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white font-semibold px-6 py-2 rounded-lg transition shadow-lg shadow-red-500/30 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {saving ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Signing...
+                  </>
+                ) : (
+                  <>
+                    <span className="text-lg">✍️</span>
+                    Sign Document
+                  </>
+                )}
+              </button>
             )}
-          </button>
+          </div>
         </div>
 
         {/* PDF viewer */}
@@ -454,10 +534,15 @@ export default function SignatureEditorPage() {
         </div>
 
         <div className="p-4 border-b border-slate-700/50">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center justify-between mb-2">
             <h3 className="text-slate-300 text-sm font-bold">Required fields</h3>
             <span className="text-indigo-400 text-xs">Drag and drop</span>
           </div>
+          
+          {/* ✅ NEW: Simple instruction text */}
+          <p className="text-slate-500 text-xs mb-3 leading-relaxed">
+            Drag the "Signature" field from here onto the document where you want signers to sign.
+          </p>
           
           {requiredFields.map(field => (
             <div
